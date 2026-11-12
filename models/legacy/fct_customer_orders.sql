@@ -1,43 +1,43 @@
-with raw_orders as (
-    select * from {{ source("jaffle_shop", "orders") }}
+with orders as (
+    select * from {{ ref('stg_jaffle_shop__orders') }}
 ),
-raw_customers as (
-    select * from {{ source("jaffle_shop", "customers") }}
+customers as (
+    select * from {{ ref('stg_jaffle_shop__customers') }}
 ),
-raw_payment as (
-    select * from {{ source("stripe", "payment") }}
+payments as (
+    select * from {{ ref('stg_stripe__payments') }}
 ),
 order_payment_agg as (
     select
-        orderid as order_id,
-        max(created) as payment_finalized_date,
-        sum(amount) / 100.0 as total_amount_paid
-    from raw_payment
-    where status <> 'fail'
+        order_id,
+        max(payment_created_at) as payment_finalized_date,
+        sum(payment_amount) / 100.0 as total_amount_paid
+    from payments
+    where payment_status <> 'fail'
     group by 1
 ),
 paid_orders as (
     select
-        o.id as order_id,
-        o.user_id as customer_id,
+        o.order_id,
+        o.customer_id,
         o.order_date as order_placed_at,
-        o.status as order_status,
+        o.order_status,
         p.total_amount_paid,
         p.payment_finalized_date,
         c.first_name as customer_first_name,
         c.last_name as customer_last_name
-    from raw_orders as o
-    left join order_payment_agg p on o.id = p.order_id
-    left join raw_customers c on o.user_id = c.id
+    from orders as o
+    left join order_payment_agg p on o.order_id = p.order_id
+    left join customers c on o.customer_id = c.customer_id
 ),
 customer_orders as (
     select
-        c.id as customer_id,
+        c.customer_id,
         min(o.order_date) as first_order_date,
         max(o.order_date) as most_recent_order_date,
-        count(o.id) as number_of_orders
-    from raw_customers c
-    left join raw_orders as o on o.user_id = c.id
+        count(o.order_id) as number_of_orders
+    from customers c
+    left join orders as o on o.customer_id = c.customer_id
     group by 1
 ),
 customer_ltv as (
@@ -52,7 +52,14 @@ customer_ltv as (
     order by p.order_id
 )
 select
-    p.*,
+    p.order_id,
+    p.customer_id,
+    p.order_placed_at,
+    p.order_status,
+    p.total_amount_paid,
+    p.payment_finalized_date,
+    p.customer_first_name,
+    p.customer_last_name,
     row_number() over (order by p.order_id) as transaction_seq,
     row_number() over (partition by customer_id order by p.order_id) as customer_sales_seq,
     case when c.first_order_date = p.order_placed_at then 'new' else 'return' end as customer_type,
